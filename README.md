@@ -1,7 +1,5 @@
 - 👋 Hi, I’m @wuestenigel
-- 👀 I’m interested in learning Python
 - 🌱 I’m currently learning 
-- 💞️ I’m looking to collaborate on Co-Streaming on [Twitch](https://twitch.tv/wuestenigel) while learning new skills
 - 📫 How to reach me: [Twitter](https://twitter.com/wuestenigel) or [Discord](https://discord.gg/wuestenigel)
 
 <!---
