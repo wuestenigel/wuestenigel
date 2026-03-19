@@ -1,6 +1,5 @@
 - 👋 Hi, I’m @wuestenigel
-- 🌱 I’m currently learning
-- 🌐 Check out my project: [OpenClawy.de](https://openclawy.de)
+- 🌱 I’m currently learning 
 - 📫 How to reach me: [Twitter](https://twitter.com/wuestenigel) or [Discord](https://discord.gg/wuestenigel)
 
 <!---
