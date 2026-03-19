@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Frog Jump &amp; Run</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #eee;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 10px;
+      color: #7fff7f;
+      text-shadow: 0 0 10px #0f0;
+    }
+
+    #hud {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 8px;
+      font-size: 1.1rem;
+    }
+
+    #hud span { color: #7fff7f; }
+
+    canvas {
+      border: 3px solid #3a7a3a;
+      border-radius: 6px;
+      box-shadow: 0 0 30px #0f04;
+      display: block;
+    }
+
+    #message {
+      margin-top: 14px;
+      font-size: 1.1rem;
+      color: #ffe066;
+      min-height: 1.4em;
+      text-align: center;
+    }
+
+    #controls {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #888;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>🐸 Frog Jump &amp; Run</h1>
+  <div id="hud">
+    <div>Score: <span id="scoreDisplay">0</span></div>
+    <div>Best: <span id="bestDisplay">0</span></div>
+    <div>Lives: <span id="livesDisplay">❤️❤️❤️</span></div>
+  </div>
+  <canvas id="gameCanvas" width="800" height="360"></canvas>
+  <div id="message">Drücke LEERTASTE oder tippe den Bildschirm um zu starten!</div>
+  <div id="controls">LEERTASTE / ↑ = Springen &nbsp;|&nbsp; Touch = Springen</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const bestDisplay = document.getElementById('bestDisplay');
+const livesDisplay = document.getElementById('livesDisplay');
+const message = document.getElementById('message');
+
+const W = canvas.width;
+const H = canvas.height;
+const GROUND = H - 60;
+
+// ── Game state ──────────────────────────────────────────────────────────────
+let state = 'idle'; // idle | playing | dead | win
+let score = 0;
+let best = 0;
+let lives = 3;
+let speed = 4;
+let frame = 0;
+let invincible = 0;     // frames of invincibility after hit
+
+// ── Background layers ───────────────────────────────────────────────────────
+const bgLayers = [
+  { x: 0, speed: 0.3, color: '#0d2b45', clouds: [] },
+  { x: 0, speed: 0.7, color: '#16394e', clouds: [] },
+];
+
+function initClouds() {
+  bgLayers[0].clouds = Array.from({length: 6}, (_, i) => ({
+    x: i * 150 + 30, y: 30 + Math.random() * 60, w: 80 + Math.random() * 60, h: 30 + Math.random() * 20
+  }));
+  bgLayers[1].clouds = Array.from({length: 4}, (_, i) => ({
+    x: i * 220 + 80, y: 60 + Math.random() * 50, w: 50 + Math.random() * 40, h: 20 + Math.random() * 15
+  }));
+}
+initClouds();
+
+// ── Stars ───────────────────────────────────────────────────────────────────
+const stars = Array.from({length: 80}, () => ({
+  x: Math.random() * W, y: Math.random() * (GROUND - 20),
+  r: Math.random() * 1.5 + 0.3, blink: Math.random() * Math.PI * 2
+}));
+
+// ── Ground tiles ─────────────────────────────────────────────────────────────
+const TILE = 40;
+const groundTiles = Array.from({length: Math.ceil(W / TILE) + 2}, (_, i) => i * TILE);
+let groundOffset = 0;
+
+// ── Frog ─────────────────────────────────────────────────────────────────────
+const frog = {
+  x: 120, y: GROUND, w: 48, h: 48,
+  vy: 0, jumping: false, doubleJump: false,
+  legPhase: 0,
+};
+
+const GRAVITY = 0.55;
+const JUMP_FORCE = -13;
+
+function jump() {
+  if (!frog.jumping) {
+    frog.vy = JUMP_FORCE;
+    frog.jumping = true;
+    frog.doubleJump = false;
+  } else if (!frog.doubleJump) {
+    frog.vy = JUMP_FORCE * 0.8;
+    frog.doubleJump = true;
+  }
+}
+
+// ── Obstacles & coins ────────────────────────────────────────────────────────
+let obstacles = [];
+let coins = [];
+let particles = [];
+
+let obstacleTimer = 0;
+let coinTimer = 0;
+let obstacleInterval = 90;
+
+function spawnObstacle() {
+  const type = Math.random() < 0.35 ? 'fly' : 'log';
+  if (type === 'log') {
+    const h = 30 + Math.floor(Math.random() * 3) * 15;
+    obstacles.push({ x: W + 20, y: GROUND - h + frog.h, w: 28, h, type: 'log' });
+  } else {
+    const altitudes = [GROUND - 30, GROUND - 90, GROUND - 150];
+    const y = altitudes[Math.floor(Math.random() * altitudes.length)];
+    obstacles.push({ x: W + 20, y, w: 32, h: 32, type: 'fly', angle: 0 });
+  }
+}
+
+function spawnCoin() {
+  const y = GROUND - 40 - Math.floor(Math.random() * 4) * 40;
+  coins.push({ x: W + 10, y, r: 10, collected: false, anim: 0 });
+}
+
+function addParticles(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 5,
+      vy: -Math.random() * 4 - 1,
+      life: 1, color,
+      r: Math.random() * 5 + 2
+    });
+  }
+}
+
+// ── Collision ─────────────────────────────────────────────────────────────────
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function circleRect(c, r) {
+  // c = {x, y, r}  r = {x, y, w, h}
+  const cx = Math.max(r.x, Math.min(c.x, r.x + r.w));
+  const cy = Math.max(r.y, Math.min(c.y, r.y + r.h));
+  return (c.x - cx) ** 2 + (c.y - cy) ** 2 < c.r ** 2;
+}
+
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+function drawRoundRect(x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function drawFrog(x, y, w, h, legPhase, blinking) {
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+
+  // Body
+  const grad = ctx.createRadialGradient(cx - 4, cy - 4, 2, cx, cy, w * 0.55);
+  grad.addColorStop(0, '#90ff50');
+  grad.addColorStop(1, '#2a8a00');
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 4, w * 0.46, h * 0.42, 0, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Belly
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 10, w * 0.28, h * 0.25, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#c8ffaa';
+  ctx.fill();
+
+  // Back legs
+  const legAngle = Math.sin(legPhase) * 0.5;
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(cx + side * w * 0.3, cy + h * 0.28);
+    ctx.rotate(side * (0.8 + legAngle));
+    ctx.beginPath();
+    ctx.roundRect(-4, 0, 8, 18, 4);
+    ctx.fillStyle = '#3daa00';
+    ctx.fill();
+    // foot
+    ctx.beginPath();
+    ctx.ellipse(side * 4, 22, 10, 5, side * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = '#2a8a00';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Front legs
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.translate(cx + side * w * 0.38, cy + 2);
+    ctx.rotate(side * 0.5);
+    ctx.beginPath();
+    ctx.roundRect(-3, 0, 6, 12, 3);
+    ctx.fillStyle = '#3daa00';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Head
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - h * 0.18, w * 0.4, h * 0.28, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#6edc2e';
+  ctx.fill();
+
+  // Eyes
+  for (const side of [-1, 1]) {
+    const ex = cx + side * w * 0.18;
+    const ey = cy - h * 0.3;
+    // eye bump
+    ctx.beginPath();
+    ctx.arc(ex, ey, 9, 0, Math.PI * 2);
+    ctx.fillStyle = '#90ff50';
+    ctx.fill();
+    // iris
+    ctx.beginPath();
+    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffdd00';
+    ctx.fill();
+    // pupil
+    if (!blinking) {
+      ctx.beginPath();
+      ctx.arc(ex + 1, ey + 1, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#111';
+      ctx.fill();
+      // shine
+      ctx.beginPath();
+      ctx.arc(ex + 2, ey - 1, 1, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+    } else {
+      // blink line
+      ctx.beginPath();
+      ctx.moveTo(ex - 5, ey);
+      ctx.lineTo(ex + 5, ey);
+      ctx.strokeStyle = '#2a8a00';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
+  // Mouth
+  ctx.beginPath();
+  ctx.arc(cx, cy - h * 0.06, 8, 0.1, Math.PI - 0.1);
+  ctx.strokeStyle = '#2a8a00';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function drawLog(o) {
+  // Log (stump)
+  drawRoundRect(o.x, o.y, o.w, o.h, 5, '#7a4a10', '#4a2800');
+  // Wood rings
+  for (let i = 4; i < o.h; i += 10) {
+    ctx.beginPath();
+    ctx.moveTo(o.x + 4, o.y + i);
+    ctx.lineTo(o.x + o.w - 4, o.y + i);
+    ctx.strokeStyle = '#5a3408';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  // Moss on top
+  ctx.beginPath();
+  ctx.ellipse(o.x + o.w / 2, o.y, o.w / 2 + 4, 7, 0, Math.PI, 0);
+  ctx.fillStyle = '#3daa00';
+  ctx.fill();
+}
+
+function drawFly(o) {
+  ctx.save();
+  ctx.translate(o.x + o.w / 2, o.y + o.h / 2);
+  ctx.rotate(o.angle);
+
+  // Wing
+  const wingFlap = Math.sin(frame * 0.4) * 0.4;
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.rotate(side * wingFlap);
+    ctx.beginPath();
+    ctx.ellipse(side * 14, -4, 12, 7, side * 0.3, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(180,220,255,0.7)';
+    ctx.strokeStyle = '#88aacc';
+    ctx.lineWidth = 1;
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Body
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 7, 11, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#222';
+  ctx.fill();
+
+  // Stripes
+  for (let i = -6; i <= 6; i += 4) {
+    ctx.beginPath();
+    ctx.moveTo(-6, i);
+    ctx.lineTo(6, i);
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Eyes
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(side * 4, -8, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#cc0000';
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawCoin(c) {
+  const pulse = 1 + Math.sin(c.anim * 0.15) * 0.1;
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.scale(pulse, pulse);
+  // Outer glow
+  ctx.shadowColor = '#ffee00';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.arc(0, 0, c.r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffd700';
+  ctx.fill();
+  ctx.strokeStyle = '#ff9900';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  // Star symbol
+  ctx.fillStyle = '#ff9900';
+  ctx.font = `bold ${c.r}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('★', 0, 1);
+  ctx.restore();
+}
+
+function drawGround() {
+  // Grass strip
+  ctx.fillStyle = '#1f5c1f';
+  ctx.fillRect(0, GROUND + frog.h, W, H - GROUND - frog.h);
+
+  // Grass top
+  ctx.fillStyle = '#2a8a00';
+  ctx.fillRect(0, GROUND + frog.h - 8, W, 14);
+
+  // Tiles
+  const tileW = 40;
+  const tileH = 12;
+  for (let i = 0; i < Math.ceil(W / tileW) + 1; i++) {
+    const tx = ((i * tileW - groundOffset % tileW) + tileW) % (tileW * (Math.ceil(W / tileW) + 1));
+    drawRoundRect(tx - 2, GROUND + frog.h + 2, tileW - 4, tileH, 2, '#195019', null);
+  }
+
+  // Ground details - rocks
+  for (let i = 0; i < 5; i++) {
+    const rx = ((i * 180 - groundOffset * 0.5) % (W + 50) + W + 50) % (W + 50);
+    ctx.beginPath();
+    ctx.ellipse(rx, GROUND + frog.h + 4, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#5a7a5a';
+    ctx.fill();
+  }
+}
+
+function drawBg() {
+  // Sky gradient
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#0a1628');
+  sky.addColorStop(1, '#1a3a5c');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, GROUND + frog.h);
+
+  // Stars
+  for (const s of stars) {
+    const alpha = 0.4 + 0.6 * Math.abs(Math.sin(s.blink + frame * 0.02));
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fill();
+    s.blink += 0.01;
+  }
+
+  // Moon
+  ctx.beginPath();
+  ctx.arc(W - 80, 60, 35, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffe080';
+  ctx.shadowColor = '#ffee00';
+  ctx.shadowBlur = 20;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // Craters
+  for (const [cx2, cy2, cr] of [[W-90, 55, 6], [W-68, 72, 4], [W-80, 42, 3]]) {
+    ctx.beginPath();
+    ctx.arc(cx2, cy2, cr, 0, Math.PI * 2);
+    ctx.fillStyle = '#d4b060';
+    ctx.fill();
+  }
+
+  // Clouds (parallax)
+  for (const layer of bgLayers) {
+    for (const c of layer.clouds) {
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, c.w / 2, c.h / 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = layer.color === '#0d2b45' ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)';
+      ctx.fill();
+      c.x -= layer.speed * (speed / 4);
+      if (c.x + c.w / 2 < 0) c.x = W + c.w / 2;
+    }
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHitEffect() {
+  if (invincible > 0 && Math.floor(invincible / 4) % 2 === 0) {
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ── Overlay screens ───────────────────────────────────────────────────────────
+function drawOverlay(title, sub, color) {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = color;
+  ctx.font = 'bold 52px Courier New';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(title, W / 2, H / 2 - 30);
+  ctx.fillStyle = '#eee';
+  ctx.font = '22px Courier New';
+  ctx.fillText(sub, W / 2, H / 2 + 20);
+}
+
+// ── Main update ───────────────────────────────────────────────────────────────
+function update() {
+  if (state !== 'playing') return;
+
+  frame++;
+  score++;
+  speed = 4 + Math.floor(score / 500) * 0.5;
+  groundOffset += speed;
+
+  // Frog physics
+  frog.y += frog.vy;
+  frog.vy += GRAVITY;
+  if (frog.y >= GROUND) {
+    frog.y = GROUND;
+    frog.vy = 0;
+    frog.jumping = false;
+    frog.doubleJump = false;
+    frog.legPhase += 0.2;
+  } else {
+    frog.legPhase = (Math.PI / 4) * (frog.vy < 0 ? -1 : 1);
+  }
+
+  // Obstacle timer
+  obstacleTimer++;
+  if (obstacleTimer >= obstacleInterval) {
+    obstacleTimer = 0;
+    obstacleInterval = 60 + Math.floor(Math.random() * 60);
+    spawnObstacle();
+  }
+
+  // Coin timer
+  coinTimer++;
+  if (coinTimer >= 120) {
+    coinTimer = 0;
+    if (Math.random() < 0.7) spawnCoin();
+  }
+
+  // Update obstacles
+  for (const o of obstacles) {
+    o.x -= speed;
+    if (o.type === 'fly') {
+      o.angle = Math.sin(frame * 0.05) * 0.15;
+      // Fly moves slightly up/down
+      o.y += Math.sin(frame * 0.03 + o.x) * 0.5;
+    }
+  }
+  obstacles = obstacles.filter(o => o.x + o.w > -20);
+
+  // Update coins
+  for (const c of coins) {
+    c.x -= speed;
+    c.anim++;
+  }
+  coins = coins.filter(c => c.x + c.r > -20 && !c.collected);
+
+  // Update particles
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.15;
+    p.life -= 0.03;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  if (invincible > 0) invincible--;
+
+  // Collision with obstacles
+  const frogBox = { x: frog.x + 6, y: frog.y + 4, w: frog.w - 12, h: frog.h - 8 };
+  for (const o of obstacles) {
+    if (rectsOverlap(frogBox, o) && invincible === 0) {
+      addParticles(frog.x + frog.w / 2, frog.y + frog.h / 2, '#ff4444');
+      lives--;
+      invincible = 80;
+      updateLivesDisplay();
+      if (lives <= 0) {
+        state = 'dead';
+        message.textContent = `Game Over! Score: ${score} — Drücke LEERTASTE um neu zu starten`;
+        if (score > best) { best = score; bestDisplay.textContent = best; }
+      }
+    }
+  }
+
+  // Collision with coins
+  for (const c of coins) {
+    if (!c.collected && circleRect({ x: c.x, y: c.y, r: c.r }, frogBox)) {
+      c.collected = true;
+      score += 50;
+      addParticles(c.x, c.y, '#ffd700', 8);
+    }
+  }
+
+  scoreDisplay.textContent = score;
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawBg();
+  drawGround();
+
+  // Coins behind frog
+  for (const c of coins) drawCoin(c);
+
+  // Obstacles
+  for (const o of obstacles) {
+    if (o.type === 'log') drawLog(o);
+    else drawFly(o);
+  }
+
+  // Frog (flicker when invincible)
+  const blink = frame % 8 < 4;
+  if (invincible === 0 || blink) {
+    drawFrog(frog.x, frog.y, frog.w, frog.h, frog.legPhase, frame % 80 < 3);
+  }
+
+  drawParticles();
+  drawHitEffect();
+
+  if (state === 'idle') drawOverlay('🐸 FROG RUN', 'Drücke LEERTASTE oder tippe!', '#7fff7f');
+  if (state === 'dead') drawOverlay('💀 GAME OVER', `Score: ${score}  |  Best: ${best}`, '#ff6666');
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+function handleJump() {
+  if (state === 'idle') {
+    startGame();
+  } else if (state === 'playing') {
+    jump();
+  } else if (state === 'dead') {
+    startGame();
+  }
+}
+
+function startGame() {
+  state = 'playing';
+  score = 0;
+  lives = 3;
+  speed = 4;
+  frame = 0;
+  invincible = 0;
+  obstacleTimer = 0;
+  coinTimer = 0;
+  obstacleInterval = 90;
+  obstacles = [];
+  coins = [];
+  particles = [];
+  frog.y = GROUND;
+  frog.vy = 0;
+  frog.jumping = false;
+  frog.doubleJump = false;
+  updateLivesDisplay();
+  scoreDisplay.textContent = '0';
+  message.textContent = '';
+}
+
+function updateLivesDisplay() {
+  livesDisplay.textContent = '❤️'.repeat(Math.max(0, lives));
+}
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    handleJump();
+  }
+});
+
+canvas.addEventListener('touchstart', e => { e.preventDefault(); handleJump(); }, { passive: false });
+canvas.addEventListener('mousedown', () => handleJump());
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+updateLivesDisplay();
+loop();
+</script>
+</body>
+</html>
