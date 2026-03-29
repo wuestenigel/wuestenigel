@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "image-plagiarism-hunter"
+version = "1.0.0"
+description = "Monitor the web for unauthorized use of your images, photos, and visual content."
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+image-plagiarism-hunter = "image_plagiarism_hunter.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["image_plagiarism_hunter*"]
